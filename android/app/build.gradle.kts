@@ -58,5 +58,5 @@ dependencies {
     implementation ("androidx.camera:camera-camera2:1.3.4")
     implementation ("androidx.camera:camera-lifecycle:1.3.4")
     implementation ("androidx.camera:camera-view:1.3.4")
-    implementation ("com.google.mediapipe:tasks-vision:latest.release")
+    implementation ("com.google.mediapipe:tasks-vision:0.10.8")
 }

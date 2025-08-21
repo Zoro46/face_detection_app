@@ -1,11 +1,16 @@
 package com.example.face_detection_app
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Size
 import android.view.View
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
@@ -18,7 +23,6 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
-import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import org.json.JSONArray
@@ -30,6 +34,7 @@ class MainActivity : FlutterActivity() {
     private lateinit var eventChannel: EventChannel
     private var eventSink: EventChannel.EventSink? = null
     private lateinit var methodChannel: MethodChannel
+    internal var previewPlatformView: PreviewPlatformView? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -67,6 +72,15 @@ class MainActivity : FlutterActivity() {
                 eventSink?.success(detections)
             })
     }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == PreviewPlatformView.CAMERA_PERMISSION_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                previewPlatformView?.startCameraAfterPermission()
+            }
+        }
+    }
 }
 
 class PreviewPlatformViewFactory(
@@ -75,7 +89,9 @@ class PreviewPlatformViewFactory(
 ) : PlatformViewFactory(io.flutter.plugin.common.StandardMessageCodec.INSTANCE) {
 
     override fun create(context: Context, id: Int, args: Any?): PlatformView {
-        return PreviewPlatformView(activity, onDetections)
+        val view = PreviewPlatformView(activity, onDetections)
+        (activity as MainActivity).previewPlatformView = view
+        return view
     }
 }
 
@@ -98,7 +114,23 @@ class PreviewPlatformView(
     private var imageSize = Size(0, 0)
 
     init {
+        checkCameraPermissionAndStart()
+    }
+
+    private fun checkCameraPermissionAndStart() {
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            startCamera()
+        } else {
+            ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_CODE)
+        }
+    }
+
+    fun startCameraAfterPermission() {
         startCamera()
+    }
+
+    companion object {
+        const val CAMERA_PERMISSION_CODE = 100
     }
 
     override fun getView(): View = previewView
@@ -109,9 +141,10 @@ class PreviewPlatformView(
     }
 
     private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(activity)
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
+        try {
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(activity)
+            cameraProviderFuture.addListener({
+                val cameraProvider = cameraProviderFuture.get()
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
@@ -152,10 +185,13 @@ class PreviewPlatformView(
 
 
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
-                activity, cameraSelector, preview, imageAnalyzer
-            )
-        }, ContextCompat.getMainExecutor(activity))
+                cameraProvider.bindToLifecycle(
+                    activity, cameraSelector, preview, imageAnalyzer
+                )
+            }, ContextCompat.getMainExecutor(activity))
+        } catch (exc: Exception) {
+            exc.printStackTrace()
+        }
     }
 
     private fun processFrame(imageProxy: ImageProxy) {
@@ -173,48 +209,49 @@ class PreviewPlatformView(
     }
 
     private fun sendDetections(result: FaceDetectorResult) {
+        
+        // Only send if we have faces
+        if (result.detections().isEmpty()) return
+        
         // Build normalized boxes JSON
         val root = JSONObject()
         val arr = JSONArray()
         result.detections().forEach { det ->
             val box = det.boundingBox() // normalized rect [0..1] in live stream
             val obj = JSONObject()
-            obj.put("x", box.left)
-            obj.put("y", box.top)
-            obj.put("w", box.width())
-            obj.put("h", box.height())
+            // Normalize coordinates to 0-1 range with padding
+            val scaleFactor = 1.6f // Make box 50% larger
+            val originalW = box.width() / imageSize.width
+            val originalH = box.height() / imageSize.height
+            val originalX = box.left / imageSize.width
+            val originalY = box.top / imageSize.height
+            
+            val normalizedW = originalW * scaleFactor
+            val normalizedH = originalH * scaleFactor
+            val normalizedX = originalX - (normalizedW - originalW) / 2
+            val normalizedY = originalY - (normalizedH - originalH) / 2
+            
+            obj.put("x", normalizedX)
+            obj.put("y", normalizedY)
+            obj.put("w", normalizedW)
+            obj.put("h", normalizedH)
             arr.put(obj)
         }
         root.put("boxes", arr)
         root.put("imageWidth", imageSize.width)
         root.put("imageHeight", imageSize.height)
         root.put("mirrored", true) // front camera
-        onDetections(root.toString())
+        
+        val jsonString = root.toString()
+        
+        // Switch to main thread for Flutter EventSink
+        Handler(Looper.getMainLooper()).post {
+            try {
+                onDetections(jsonString)
+                // Successfully sent to Flutter
+            } catch (e: Exception) {
+                // Failed to send to Flutter
+            }
+        }
     }
 }
-
-/** -------- Helpers: ImageProxy -> Bitmap (simple & adequate for live preview) -------- */
-private fun ImageProxy.toBitmap(): android.graphics.Bitmap {
-    val yBuffer: ByteBuffer = planes[0].buffer
-    val uBuffer: ByteBuffer = planes[1].buffer
-    val vBuffer: ByteBuffer = planes[2].buffer
-
-    val ySize = yBuffer.remaining()
-    val uSize = uBuffer.remaining()
-    val vSize = vBuffer.remaining()
-
-    val nv21 = ByteArray(ySize + uSize + vSize)
-    yBuffer.get(nv21, 0, ySize)
-    // NV21 format: V then U
-    val uv = ByteArray(uSize + vSize)
-    vBuffer.get(uv, 0, vSize)
-    uBuffer.get(uv, vSize, uSize)
-    System.arraycopy(uv, 0, nv21, ySize, uv.size)
-
-    val yuvImage = android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, width, height, null)
-    val out = java.io.ByteArrayOutputStream()
-    yuvImage.compressToJpeg(android.graphics.Rect(0, 0, width, height), 80, out)
-    val imageBytes = out.toByteArray()
-    return android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-}
-

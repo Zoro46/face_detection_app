@@ -1,23 +1,6 @@
 import 'package:flutter/material.dart';
-//
-// class FaceDetectorPage extends StatefulWidget {
-//   const FaceDetectorPage({super.key});
-//
-//   @override
-//   State<FaceDetectorPage> createState() => _FaceDetectorPageState();
-// }
-//
-// class _FaceDetectorPageState extends State<FaceDetectorPage> {
-//   @override
-//   Widget build(BuildContext context) {
-//     return const Placeholder();
-//   }
-// }
-
-
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 
@@ -96,7 +79,7 @@ class FacePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = Colors.green
-      ..strokeWidth = 3
+      ..strokeWidth = 6  // Increased from 3 to 6
       ..style = PaintingStyle.stroke;
 
     for (final face in faces) {
