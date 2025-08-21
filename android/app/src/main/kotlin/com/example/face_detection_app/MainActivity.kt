@@ -175,7 +175,7 @@ class PreviewPlatformView(
             val options = FaceDetector.FaceDetectorOptions.builder()
                 .setBaseOptions(baseOptions)
                 .setRunningMode(RunningMode.LIVE_STREAM)
-                .setMinDetectionConfidence(0.5f)
+                .setMinDetectionConfidence(0.8f)
                 .setResultListener { result: FaceDetectorResult, _ ->
                     sendDetections(result)
                 }
@@ -196,6 +196,7 @@ class PreviewPlatformView(
 
     private fun processFrame(imageProxy: ImageProxy) {
         try {
+            
             // Convert to MPImage (fast-path YUV->Bitmap; minimal work)
             val bitmap = imageProxy.toBitmap() // helper extension below
             val mpImage: MPImage = BitmapImageBuilder(bitmap).build()
@@ -210,27 +211,26 @@ class PreviewPlatformView(
 
     private fun sendDetections(result: FaceDetectorResult) {
         
-        // Only send if we have faces
-        if (result.detections().isEmpty()) return
-        
         // Build normalized boxes JSON
         val root = JSONObject()
         val arr = JSONArray()
+        
+        // Process faces if any are detected
         result.detections().forEach { det ->
             val box = det.boundingBox() // normalized rect [0..1] in live stream
             val obj = JSONObject()
             // Normalize coordinates to 0-1 range with padding
-            val scaleFactor = 1.6f // Make box 50% larger
-            val originalW = box.width() / imageSize.width
-            val originalH = box.height() / imageSize.height
-            val originalX = box.left / imageSize.width
-            val originalY = box.top / imageSize.height
-            
+            val scaleFactor = 1.1f // Make box 60% larger
+            val originalW = box.width().toFloat() / imageSize.width
+            val originalH = box.height().toFloat() / imageSize.height
+            val originalX = box.left.toFloat() / imageSize.width
+            val originalY = box.top.toFloat() / imageSize.height
+
             val normalizedW = originalW * scaleFactor
             val normalizedH = originalH * scaleFactor
             val normalizedX = originalX - (normalizedW - originalW) / 2
             val normalizedY = originalY - (normalizedH - originalH) / 2
-            
+
             obj.put("x", normalizedX)
             obj.put("y", normalizedY)
             obj.put("w", normalizedW)
